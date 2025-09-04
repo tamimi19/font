@@ -1,4 +1,4 @@
-name: Generate Wrapper & Build APK with Chaquopy (No Cache)
+name: Update Gradle Wrapper & Build APK with Chaquopy
 
 on:
   push:
@@ -10,28 +10,40 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ سحب الكود
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ تثبيت JDK
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # 3️⃣ تثبيت Gradle
       - name: Install Gradle
         run: sudo apt-get update && sudo apt-get install -y gradle
 
-      - name: Generate Gradle Wrapper if missing
+      # 4️⃣ تحديث ملف gradle-wrapper.properties لنسخة 8.2
+      - name: Force Gradle 8.2 in wrapper properties
+        run: |
+          mkdir -p gradle/wrapper
+          echo "distributionUrl=https\\://services.gradle.org/distributions/gradle-8.2-all.zip" > gradle/wrapper/gradle-wrapper.properties
+
+      # 5️⃣ توليد gradle-wrapper.jar إذا لم يكن موجود
+      - name: Generate Gradle Wrapper JAR if missing
         run: |
           if [ ! -f gradlew ]; then
-            gradle wrapper --gradle-version 8.5 --distribution-type all
+            gradle wrapper --gradle-version 8.2 --distribution-type all
           fi
           chmod +x gradlew
 
+      # 6️⃣ بناء APK
       - name: Build APK
         run: ./gradlew assembleDebug
 
+      # 7️⃣ رفع الـAPK كـArtifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
