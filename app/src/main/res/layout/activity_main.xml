@@ -1,48 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:orientation="vertical"
-    android:padding="16dp"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center">
 
     <TextView
-        android:text="اختر ملف الخط العربي"
+        android:id="@+id/textView"
+        android:text="جارٍ تحميل بايثون..."
+        android:textSize="20sp"
         android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
-
-    <EditText
-        android:id="@+id/editArabic"
-        android:hint="مثال: arabic.ttf"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
-
-    <TextView
-        android:text="اختر ملف الخط اللاتيني"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content" />
-
-    <EditText
-        android:id="@+id/editEnglish"
-        android:hint="مثال: english.ttf"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content" />
-
-    <Button
-        android:id="@+id/btnMerge"
-        android:text="دمج الخطوط"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="16dp"/>
-
-    <TextView
-        android:id="@+id/textResult"
-        android:text=""
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:padding="8dp"
-        android:textColor="#2E7D32"
-        android:textSize="16sp"
-        android:layout_marginTop="16dp"
-        android:background="#F0F0F0"/>
-
+        android:layout_height="wrap_content"/>
 </LinearLayout>
