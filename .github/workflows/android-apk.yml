@@ -19,12 +19,10 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      # تثبيت Gradle مؤقتًا لتوليد wrapper جديد
       - name: Install Gradle CLI
         run: sudo apt-get update && sudo apt-get install -y gradle
 
-      # حذف أي wrapper قديم وتوليد واحد جديد بـ 8.2
-      - name: Force regenerate Gradle Wrapper 8.2
+      - name: Regenerate Gradle Wrapper (8.2)
         run: |
           rm -rf gradle gradlew gradlew.bat
           gradle wrapper --gradle-version 8.2 --distribution-type all
