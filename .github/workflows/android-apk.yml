@@ -1,3 +1,7 @@
+- name: اعطاء gradlew صلاحيات التنفيذ
+  run: chmod +x ./gradlew
+
+
 name: Build Android APK
 
 on:
