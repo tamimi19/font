@@ -1,4 +1,4 @@
-name: Force Gradle 8.2 & Build APK
+name: Generate Wrapper & Build APK
 
 on:
   push:
@@ -10,27 +10,34 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ سحب الكود
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 2️⃣ تثبيت JDK
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
+      # 3️⃣ تثبيت Gradle CLI مؤقتًا لتوليد الـwrapper
       - name: Install Gradle CLI
         run: sudo apt-get update && sudo apt-get install -y gradle
 
-      - name: Regenerate Gradle Wrapper (8.2)
-        run: |
-          rm -rf gradle gradlew gradlew.bat
-          gradle wrapper --gradle-version 8.2 --distribution-type all
-          chmod +x gradlew
+      # 4️⃣ توليد ملفات Gradle Wrapper إذا لم تكن موجودة
+      - name: Generate Gradle Wrapper (8.2)
+        run: gradle wrapper --gradle-version 8.2 --distribution-type all
 
+      # 5️⃣ إعطاء صلاحية التنفيذ لملف gradlew
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      # 6️⃣ بناء الـAPK
       - name: Build APK
         run: ./gradlew assembleDebug
 
+      # 7️⃣ رفع الـAPK كـArtifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
