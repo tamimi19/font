@@ -1,48 +1,37 @@
 plugins {
     id 'com.android.application'
-    id 'com.chaquo.python'
+    id 'com.chaquo.python' version '15.0.1'
 }
 
 android {
-    namespace 'com.example.fontmerger'
+    namespace "com.example.font"
     compileSdk 34
 
     defaultConfig {
-        applicationId "com.example.fontmerger"
+        applicationId "com.example.font"
         minSdk 21
         targetSdk 34
         versionCode 1
         versionName "1.0"
-        ndk {
-            abiFilters "armeabi-v7a", "arm64-v8a"
+
+        python {
+            pip {
+                install "requests"
+            }
         }
     }
+
     buildTypes {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
         }
-    }
-    sourceSets {
-        main {
-            python.srcDir "src/main/python"
-            assets.srcDirs = ['src/main/assets']
+        debug {
+            minifyEnabled false
         }
     }
 }
 
-python {
-    pip {
-        install "fonttools"
-        install "Pillow"
-        install "arabic-reshaper"
-        install "python-bidi"
-        install "colorama"
-        install "rich"
-    }
-}
-
 dependencies {
-    implementation 'androidx.appcompat:appcompat:1.7.0'
-    implementation 'com.chaquo.python:android:15.0.2'
+    implementation 'com.chaquo.python:gradle:15.0.1'
 }
