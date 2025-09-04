@@ -1,7 +1,4 @@
-- name: اعطاء gradlew صلاحيات التنفيذ
-  run: chmod +x ./gradlew
-  
-  name: Build Android APK
+name: Build Android APK
 on:
   push:
     branches:
@@ -17,6 +14,8 @@ jobs:
         with:
           distribution: 'temurin'
           java-version: '17'
+      - name: اعطاء gradlew صلاحيات التنفيذ
+        run: chmod +x ./gradlew
       - name: Build with Gradle
         run: ./gradlew assembleDebug
       - name: Upload APK
