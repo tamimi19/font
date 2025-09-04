@@ -10,22 +10,18 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ سحب الكود
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 2️⃣ تثبيت JDK
       - name: Set up JDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
 
-      # 3️⃣ تثبيت Gradle (بدون كاش)
       - name: Install Gradle
         run: sudo apt-get update && sudo apt-get install -y gradle
 
-      # 4️⃣ توليد Gradle Wrapper إذا لم يكن موجود
       - name: Generate Gradle Wrapper if missing
         run: |
           if [ ! -f gradlew ]; then
@@ -33,11 +29,9 @@ jobs:
           fi
           chmod +x gradlew
 
-      # 5️⃣ بناء APK باستخدام Chaquopy
       - name: Build APK
         run: ./gradlew assembleDebug
 
-      # 6️⃣ رفع الـAPK كـArtifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
