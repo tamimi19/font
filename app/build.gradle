@@ -1,6 +1,6 @@
 plugins {
     id 'com.android.application'
-    id 'com.chaquo.python' // <-- تم حذف رقم الإصدار من هنا
+    id 'com.chaquo.python'
 }
 
 android {
@@ -19,6 +19,11 @@ android {
                 install "requests"
             }
         }
+        
+        // Required by Chaquopy to specify which CPU architectures to support.
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a", "x86", "x86_64"
+        }
     }
 
     buildTypes {
@@ -33,5 +38,6 @@ android {
 }
 
 dependencies {
-    // implementation 'com.chaquo.python:gradle:15.0.1' // <-- تم حذف هذا السطر بالكامل
+    // Leave this section empty if you don't have other specific dependencies.
+    // The Chaquopy plugin should NOT be listed here.
 }
