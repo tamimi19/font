@@ -31,7 +31,7 @@ public class MainActivity extends AppCompatActivity {
         setContentView(R.layout.activity_main);
         
         // Initialize Python
-        if (!Python.is = null) {
+        if (!Python.isStarted()) {
             Python.start(new AndroidPlatform(this));
         }
 
@@ -147,4 +147,4 @@ public class MainActivity extends AppCompatActivity {
             logTextView.append(message + "\n");
         });
     }
-}
+    }
