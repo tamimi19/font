@@ -1,4 +1,4 @@
-package com.example.fontmerger;
+package com.example.font;
 
 import android.os.Bundle;
 import android.os.Environment;
