@@ -22,7 +22,6 @@ android {
                 install "arabic_reshaper"
                 install "colorama"
                 install "rich"
-                install "fontforge-gtk"
                 install "libraqm"
             }
         }
