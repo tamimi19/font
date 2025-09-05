@@ -1,5 +1,7 @@
-apply plugin: 'com.android.application'
-apply plugin: 'com.chaquo.python'
+plugins {
+    id 'com.android.application'
+    id 'com.chaquo.python' version '15.0.1'
+}
 
 android {
     namespace "com.example.font"
@@ -31,5 +33,5 @@ android {
 }
 
 dependencies {
-    // ضع هنا مكتبات التطبيق فقط، وليس الـplugins
+    implementation 'com.chaquo.python:gradle:15.0.1'
 }
