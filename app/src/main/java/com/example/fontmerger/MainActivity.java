@@ -1,24 +1,15 @@
-package com.example.font;
-
 import androidx.appcompat.app.AppCompatActivity;
 import android.os.Bundle;
-import android.widget.TextView;
-import com.chaquo.python.PyObject;
-import com.chaquo.python.Python;
-import com.chaquo.python.android.AndroidPlatform;
 
 public class MainActivity extends AppCompatActivity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        // The previous build error was related to the theme.
+        // This class must extend AppCompatActivity to properly use an AppCompat theme.
+
+        // It is assumed your main layout file is named activity_main.xml
+        // If your layout file has a different name, please replace 'activity_main' below.
         setContentView(R.layout.activity_main);
-
-        if (!Python.isStarted()) {
-            Python.start(new AndroidPlatform(this));
-        }
-
-        Python py = Python.getInstance();
-        PyObject result = py.getModule("main").callAttr("hello");
-        ((TextView)findViewById(R.id.textView)).setText(result.toString());
     }
 }
