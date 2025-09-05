@@ -1,5 +1,16 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Permissions required for external storage access -->
+    <!-- READ_EXTERNAL_STORAGE: For reading font files. Limited to API 32 and below. -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    
+    <!-- WRITE_EXTERNAL_STORAGE: For saving merged fonts and previews. Limited to API 32 and below. -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    
+    <!-- This permission is required for Android 11 (API 30) and above
+         to get full access to external storage. -->
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    
     <application
         android:allowBackup="true"
         android:label="FontMerger"
