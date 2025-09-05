@@ -22,7 +22,9 @@ android {
                 install "arabic_reshaper"
                 install "colorama"
                 install "rich"
-                install "fontforge"            }
+                install "fontforge-gtk"
+                install "libraqm"
+            }
         }
         
         // Required by Chaquopy to specify which CPU architectures to support.
