@@ -1,4 +1,3 @@
-// MainActivity.java
 package com.example.fontmerger;
 
 import android.os.Bundle;
@@ -147,4 +146,4 @@ public class MainActivity extends AppCompatActivity {
             logTextView.append(message + "\n");
         });
     }
-    }
+                    }
