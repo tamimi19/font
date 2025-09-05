@@ -38,6 +38,8 @@ android {
 }
 
 dependencies {
-    // Leave this section empty if you don't have other specific dependencies.
-    // The Chaquopy plugin should NOT be listed here.
+    // هذه الاعتماديات هي ما كان ينقص المشروع لحل مشكلة النمط
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.core:core-ktx:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
 }
