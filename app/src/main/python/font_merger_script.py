@@ -17,7 +17,6 @@ from fontTools.merge import Merger
 from fontTools.subset import main as subset_main
 from PIL import Image, ImageDraw, ImageFont, features
 import arabic_reshaper
-from bidi.algorithm import get_display
 
 # محاولة استيراد uharfbuzz (أكثر شيوعاً في البيئات المحدودة)
 try:
