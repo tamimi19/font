@@ -22,7 +22,7 @@ android {
                 install "arabic_reshaper"
                 install "colorama"
                 install "rich"
-                install "uharfbuzz"
+                install "harfbuzz"
             }
         }
         
