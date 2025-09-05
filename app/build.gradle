@@ -20,7 +20,6 @@ android {
                 install "fontTools"
                 install "Pillow"
                 install "arabic_reshaper"
-                install "bidi"
                 install "colorama"
                 install "rich"
             }
