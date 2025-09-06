@@ -1,412 +1,708 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 """
-دمج الخطوط مع معاينة عالية الجودة - نسخة معدلة للتطبيقات والتشغيل الآلي
-Font merger with high-quality preview - Modified for Apps & Automation
+دمج الخطوط مع معاينة عالية الجودة
+Font merger with high-quality preview
 """
 
 import os
 import sys
-import shutil
-import tempfile
-import argparse
+import subprocess
 import time
 import traceback
+import shutil
+import tempfile
 from fontTools.ttLib import TTFont
+try:
+    from fontTools.varLib.instancer import instantiateVariableFont
+except Exception:
+    try:
+        from fontTools.varLib.mutator import instantiateVariableFont
+    except Exception:
+        instantiateVariableFont = None
+
 from fontTools.merge import Merger
 from fontTools.subset import main as subset_main
 from PIL import Image, ImageDraw, ImageFont, features
 import arabic_reshaper
+from bidi.algorithm import get_display
+from colorama import init as colorama_init, Fore, Style
+from rich.progress import Progress, BarColumn, TextColumn, TimeRemainingColumn
+from rich.console import Console
 
-# محاولة استيراد uharfbuzz (أكثر شيوعاً في البيئات المحدودة)
+# محاولة استيراد harfbuzz و uharfbuzz
 try:
-    import uharfbuzz as hb
+    import harfbuzz as hb
 except ImportError:
-    hb = None
+    try:
+        import uharfbuzz as hb
+    except ImportError:
+        hb = None
 
-# --- Constants ---
+colorama_init(autoreset=True)
+
+FONT_DIR = "/sdcard/fonts"
+TEMP_DIR = "/sdcard/fonts/temp_processing"
 EN_PREVIEW = "The quick brown fox jumps over the lazy dog. 1234567890"
 AR_PREVIEW = "سمَات مجّانِية، إختر منْ بين أكثر من ١٠٠ سمة مجانية او انشئ سماتك الخاصة هُنا في هذا التطبيق النظيف الرائع، وأظهر الابداع.١٢٣٤٥٦٧٨٩٠"
 
-# --- Global variable for log file path ---
-LOG_FILE = None
+# إنشاء المجلد المؤقت إذا لم يكن موجوداً
+os.makedirs(TEMP_DIR, exist_ok=True)
+
+# إنشاء المجلدات الفرعية
+os.makedirs(os.path.join(FONT_DIR, "previews"), exist_ok=True)
+os.makedirs(os.path.join(FONT_DIR, "merged"), exist_ok=True)
+os.makedirs(os.path.join(FONT_DIR, "logs"), exist_ok=True)
 
 # ---------- Logging ----------
-def setup_logging(base_dir):
-    """إعداد ملف السجل بناءً على المجلد الأساسي."""
-    global LOG_FILE
-    logs_dir = os.path.join(base_dir, "logs")
-    os.makedirs(logs_dir, exist_ok=True)
-    
+def get_unique_log_path():
+    """الحصول على مسار فريد لملف السجل"""
     base_name = "merge_log"
     counter = 1
-    log_file = os.path.join(logs_dir, f"{base_name}.txt")
+    log_file = os.path.join(FONT_DIR, "logs", f"{base_name}.txt")
     while os.path.exists(log_file):
-        log_file = os.path.join(logs_dir, f"{base_name}_{counter}.txt")
+        log_file = os.path.join(FONT_DIR, "logs", f"{base_name}_{counter}.txt")
         counter += 1
-    LOG_FILE = log_file
+    return log_file
 
-    # كتابة رأس السجل
-    ts = time.strftime("%Y-%m-%d %I:%M:%S %p")
-    try:
-        with open(LOG_FILE, "w", encoding="utf-8") as f:
-            f.write(f"{ts} - بدء دمج الخطوط\n")
-            f.write("="*30 + "\n")
-    except Exception as e:
-        print(f"ERROR: Failed to create log file: {e}")
+LOG_FILE = get_unique_log_path()
 
 def write_log_line(line):
-    """كتابة سطر في ملف السجل."""
-    if not LOG_FILE:
-        print("WARNING: Log file not initialized.")
-        return
+    """كتابة سجل بدون timestamp"""
     try:
         with open(LOG_FILE, "a", encoding="utf-8") as f:
             f.write(f"{line}\n")
     except Exception as e:
-        print(f"ERROR: Failed to write to log file: {e}")
+        print(f"{Fore.RED}Failed to write to log file: {e}")
 
-# ---------- Font Utilities ----------
-def has_cff(font_path):
-    """التحقق مما إذا كان الخط يحتوي على جداول CFF (مما يدل على أنه OTF)."""
+def write_log_header():
+    """كتابة رأس السجل بالوقت والتاريخ"""
+    ts = time.strftime("%Y-%m-%d %I:%M:%S %p")
     try:
-        with TTFont(font_path) as f:
-            return "CFF " in f or "CFF2" in f
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{ts} - بدء دمج الخطوط\n")
+    except Exception as e:
+        print(f"{Fore.RED}Failed to create log file: {e}")
+
+# ---------- Utilities ----------
+def copy_to_temp(src_path, temp_dir):
+    """نسخ الملف إلى المجلد المؤقت"""
+    filename = os.path.basename(src_path)
+    dst_path = os.path.join(temp_dir, filename)
+    shutil.copy2(src_path, dst_path)
+    return dst_path
+
+def shutil_which(cmd):
+    try:
+        import shutil
+        return shutil.which(cmd)
+    except Exception:
+        return None
+
+def has_cff(path):
+    try:
+        f = TTFont(path)
+        keys = f.keys()
+        return ("CFF " in keys) or ("CFF2" in keys)
     except Exception:
         return False
 
-def convert_otf_to_ttf(font_path, temp_dir):
-    """
-    تحويل الخطوط بصيغة OTF (CFF) إلى TTF باستخدام fontTools فقط.
-    """
-    base, ext = os.path.splitext(os.path.basename(font_path))
-    
-    # التحقق مما إذا كان التحويل ضرورياً
-    if ext.lower() != ".otf" and not has_cff(font_path):
-        write_log_line(f"FontTools: No conversion needed for {base}{ext}.")
-        return font_path
-
-    # إنشاء مسار للملف المحول في المجلد المؤقت
-    out_path = os.path.join(temp_dir, f"{base}_converted.ttf")
-    
+# ---------- FontForge conversion ----------
+def fontforge_convert_to_ttf(src, dst):
+    s = src.replace('\\', '\\\\').replace('"', r'\"')
+    d = dst.replace('\\', '\\\\').replace('"', r'\"')
+    script = f'Open("{s}"); SelectWorthOutputting(); Generate("{d}"); Close();'
+    cmd = ["fontforge", "-quiet", "-lang=ff", "-c", script]
     try:
-        font = TTFont(font_path)
-        # إزالة نكهة الخط (flavor) يجبر fontTools على تحويله إلى TTF (glyf) عند الحفظ
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+        if res.returncode == 0 and os.path.exists(dst):
+            write_log_line(f"FontForge: Converted {os.path.basename(src)} to TTF")
+            return True
+        else:
+            cmd2 = ["fontforge", "-quiet", "-lang=py", "-c", f'font=fontforge.open("{s}"); font.generate("{d}"); font.close()']
+            res2 = subprocess.run(cmd2, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+            if res2.returncode == 0 and os.path.exists(dst):
+                write_log_line(f"FontForge: Converted {os.path.basename(src)} to TTF (py)")
+                return True
+            return False
+    except Exception as ex:
+        write_log_line(f"FontForge exception: {ex}")
+        return False
+
+def convert_otf_to_ttf(path, temp_files):
+    base, ext = os.path.splitext(path)
+    try:
+        font = TTFont(path)
+    except Exception as ex:
+        write_log_line(f"خطأ فتح الخط {path}: {ex}")
+        raise RuntimeError(f"Cannot open font {path}: {ex}")
+    needs_conv = False
+    if ext.lower() == ".otf":
+        needs_conv = True
+    if "CFF " in font.keys() or "CFF2" in font.keys():
+        needs_conv = True
+    if not needs_conv:
+        return path
+    out = base + "_to_ttf.ttf"
+    if shutil_which("fontforge"):
+        ok = fontforge_convert_to_ttf(path, out)
+        if ok:
+            temp_files.append(out)
+            return out
+        else:
+            write_log_line(f"FontForge failed to convert {os.path.basename(path)}")
+    try:
         font.flavor = None
-        font.save(out_path)
-        write_log_line(f"FontTools: Converted {os.path.basename(font_path)} to TTF format.")
-        return out_path
-    except Exception as e:
-        write_log_line(f"ERROR: FontTools failed to convert {os.path.basename(font_path)}: {e}")
-        raise RuntimeError(f"Failed to convert {font_path} to TTF.") from e
+        font.save(out)
+        temp_files.append(out)
+        write_log_line(f"fontTools: Saved {os.path.basename(path)} as TTF")
+        return out
+    except Exception as ex:
+        write_log_line(f"فشل تحويل عن طريق fontTools: {ex}")
+        raise RuntimeError(f"Failed to convert {path} to TTF: {ex}")
 
+# ---------- UnitsPerEm unification ----------
 def try_unify_units(paths):
-    """توحيد قيمة unitsPerEm لجميع الخطوط."""
-    fonts = [TTFont(p) for p in paths]
+    fonts = []
+    for p in paths:
+        fonts.append(TTFont(p))
     units = [f['head'].unitsPerEm for f in fonts]
-    target_upem = max(units)
-    
-    for i, font in enumerate(fonts):
-        current_upem = font['head'].unitsPerEm
-        if current_upem == target_upem:
+    target = max(units)
+    for idx, f in enumerate(fonts):
+        old = f['head'].unitsPerEm
+        if old == target:
             continue
-            
-        scale = float(target_upem) / float(current_upem)
-        write_log_line(f"FontTools: Scaling {os.path.basename(paths[i])} from {current_upem} to {target_upem} UPM.")
-        
+        scale = float(target) / float(old)
+        write_log_line(f"fontTools: Unified unitsPerEm from {old} to {target}")
         try:
-            # توسيع الجداول
-            if 'glyf' in font:
-                for glyph in font['glyf'].glyphs.values():
-                    if glyph.isComposite():
-                         glyph.transform((scale, 0, 0, scale, 0, 0))
-                    else:
-                        for j, (x, y) in enumerate(glyph.coordinates):
-                            glyph.coordinates[j] = (round(x * scale), round(y * scale))
-            
-            if 'hmtx' in font:
-                for glyph_name, (width, lsb) in font['hmtx'].metrics.items():
-                    font['hmtx'].metrics[glyph_name] = (round(width * scale), round(lsb * scale))
-            
-            if 'vmtx' in font:
-                for glyph_name, (height, tsb) in font['vmtx'].metrics.items():
-                    font['vmtx'].metrics[glyph_name] = (round(height * scale), round(tsb * scale))
-            
-            if 'hhea' in font:
-                font['hhea'].ascent = round(font['hhea'].ascent * scale)
-                font['hhea'].descent = round(font['hhea'].descent * scale)
-            
-            if 'OS/2' in font:
-                os2 = font['OS/2']
-                os2.usWinAscent = round(os2.usWinAscent * scale)
-                os2.usWinDescent = abs(round(os2.usWinDescent * scale)) # يجب أن تكون موجبة
-                os2.sTypoAscender = round(os2.sTypoAscender * scale)
-                os2.sTypoDescender = round(os2.sTypoDescender * scale)
-
-            font['head'].unitsPerEm = target_upem
-            font.save(paths[i])
-
-        except Exception as e:
-            write_log_line(f"WARN: Scaling failed for {os.path.basename(paths[i])}: {e}")
-    
+            if 'glyf' in f.keys():
+                glyf = f['glyf']
+                for gname in glyf.keys():
+                    glyph = glyf[gname]
+                    try:
+                        if glyph.isComposite():
+                            glyph.transform((scale, 0, 0, scale, 0, 0))
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        coords, endPts, flags = glyph.getCoordinates(glyf)
+                        for i in range(len(coords)):
+                            x, y = coords[i]
+                            coords[i] = (int(round(x * scale)), int(round(y * scale)))
+                        try:
+                            glyph.recalcBounds(glyf)
+                        except Exception:
+                            pass
+                    except Exception:
+                        pass
+            try:
+                hmtx = f['hmtx'].metrics
+                for gname, (adv, lsb) in list(hmtx.items()):
+                    hmtx[gname] = (int(round(adv * scale)), int(round(lsb * scale)))
+            except Exception:
+                pass
+            if 'OS/2' in f.keys():
+                try:
+                    os2 = f['OS/2']
+                    if hasattr(os2, 'usWinAscent'):
+                        os2.usWinAscent = int(round(os2.usWinAscent * scale))
+                        os2.usWinDescent = int(round(os2.usWinDescent * scale))
+                except Exception:
+                    pass
+            if 'hhea' in f.keys():
+                try:
+                    f['hhea'].ascent = int(round(getattr(f['hhea'], 'ascent', 0) * scale))
+                    f['hhea'].descent = int(round(getattr(f['hhea'], 'descent', 0) * scale))
+                except Exception:
+                    pass
+            f['head'].unitsPerEm = int(target)
+        except Exception as ex:
+            write_log_line(f"[WARN] Scaling outlines failed: {ex}. Trying metrics-only.")
+            try:
+                hmtx = f['hmtx'].metrics
+                for gname, (adv, lsb) in list(hmtx.items()):
+                    hmtx[gname] = (int(round(adv * scale)), int(round(lsb * scale)))
+                if 'OS/2' in f.keys():
+                    os2 = f['OS/2']
+                    if hasattr(os2, 'usWinAscent'):
+                        os2.usWinAscent = int(round(os2.usWinAscent * scale))
+                        os2.usWinDescent = int(round(os2.usWinDescent * scale))
+                if 'hhea' in f.keys():
+                    f['hhea'].ascent = int(round(getattr(f['hhea'], 'ascent', 0) * scale))
+                    f['hhea'].descent = int(round(getattr(f['hhea'], 'descent', 0) * scale))
+                f['head'].unitsPerEm = int(target)
+            except Exception as ex2:
+                write_log_line(f"[WARN] Metric-only scaling failed: {ex2}")
+        try:
+            f.save(paths[idx])
+        except Exception as ex:
+            write_log_line(f"[WARN] Saving scaled font failed: {ex}")
     return paths
 
 # ---------- Subsetting ----------
-def subset_font(font_path, unicodes, temp_dir):
-    """تقليص حجم الخط ليحتوي فقط على الحروف المحددة."""
-    base = os.path.splitext(os.path.basename(font_path))[0]
-    out_path = os.path.join(temp_dir, f"{base}_subset.ttf")
-    
-    # حفظ واستعادة sys.argv الأصلي
-    original_argv = sys.argv
+def subset_keep(path, unicodes, temp_files):
+    base, _ = os.path.splitext(path)
+    out = base + "_sub.ttf"
+    saved_argv = sys.argv[:]
     try:
-        # بناء قائمة المعلمات لـ pyftsubset
-        sys.argv = [
-            "pyftsubset",
-            font_path,
-            f"--unicodes={unicodes}",
-            f"--output-file={out_path}",
-            "--no-hinting",
-            "--ignore-missing-unicodes"
-        ]
+        sys.argv = ["pyftsubset", path, f"--unicodes={unicodes}", f"--output-file={out}", "--no-hinting"]
         subset_main()
     except SystemExit:
-        # pyftsubset تخرج بـ SystemExit عند النجاح
         pass
-    except Exception as e:
-        write_log_line(f"WARN: Subsetting failed for {os.path.basename(font_path)}: {e}")
-        return font_path # إرجاع المسار الأصلي في حالة الفشل
+    except Exception as ex:
+        write_log_line(f"[WARN] Subset failed for {os.path.basename(path)}: {ex}")
+        sys.argv = saved_argv
+        return path
     finally:
-        sys.argv = original_argv # استعادة sys.argv دائماً
-        
-    if os.path.exists(out_path):
-        write_log_line(f"pyftsubset: Successfully subsetted {os.path.basename(font_path)}.")
-        return out_path
-    
-    write_log_line(f"WARN: Subset output file not found for {os.path.basename(font_path)}.")
-    return font_path
+        sys.argv = saved_argv
+    if os.path.exists(out):
+        temp_files.append(out)
+        write_log_line(f"pyftsubset: Subset font")
+        return out
+    return path
 
-def clean_up_languages(ar_path, en_path, temp_dir):
-    """
-    تنقية الخطوط: الخط العربي يحتوي فقط على الحروف العربية، والخط الإنجليزي على الحروف اللاتينية الأساسية.
-    """
-    # نطاقات اليونيكود للغة العربية + الأرقام
+def clean_languages(ar_path, en_path, temp_files):
     arabic_ranges = ",".join([
         "U+0600-06FF", "U+0750-077F", "U+08A0-08FF",
         "U+FB50-FDFF", "U+FE70-FEFF", "U+0660-0669"
     ])
-    # نطاق ASCII الأساسي للحروف والأرقام والعلامات
-    ascii_range = "U+0020-007E"
-    
-    ar_subset = subset_font(ar_path, arabic_ranges, temp_dir)
-    en_subset = subset_font(en_path, ascii_range, temp_dir)
-    
-    return ar_subset, en_subset
-    
+    ascii_range = "U+0020-007F"
+    ar_out = subset_keep(ar_path, arabic_ranges, temp_files)
+    en_out = subset_keep(en_path, ascii_range, temp_files)
+    return ar_out, en_out
+
 # ---------- Unique output name ----------
-def get_unique_path(path):
-    """الحصول على مسار فريد للملف لتجنب الكتابة فوق ملف موجود."""
+def unique_name(path):
     base, ext = os.path.splitext(path)
-    counter = 1
-    new_path = path
-    while os.path.exists(new_path):
-        new_path = f"{base}_{counter}{ext}"
-        counter += 1
-    return new_path
+    cand = path
+    i = 1
+    while os.path.exists(cand):
+        cand = f"{base}_{i}{ext}"
+        i += 1
+    return cand
 
-# ---------- Preview Creation ----------
+# ---------- Merge with FontForge ----------
+def merge_fonts_with_fontforge(paths, out):
+    try:
+        # إنشاء نص فونت فورج للدمج
+        script_content = f'''
+Open("{paths[0]}")
+MergeFonts("{paths[1]}")
+Generate("{out}")
+Close()
+'''
+
+        # حفظ النص في ملف مؤقت
+        script_file = os.path.join(os.path.dirname(out), "_fontforge_merge.pe")
+        with open(script_file, "w", encoding="utf-8") as f:
+            f.write(script_content)
+
+        # تنفيذ النص باستخدام فونت فورج
+        cmd = ["fontforge", "-script", script_file]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=120)
+
+        if res.returncode == 0 and os.path.exists(out):
+            write_log_line(f"FontForge: Merged fonts successfully")
+            try:
+                os.remove(script_file)
+            except:
+                pass
+            return out
+        else:
+            write_log_line(f"FontForge merge failed: {res.stderr.strip()}")
+            raise RuntimeError(f"FontForge merge failed: {res.stderr.strip()}")
+
+    except Exception as ex:
+        write_log_line(f"[ERROR] FontForge merge failed: {ex}")
+        # Fallback إلى fontTools إذا فشل فونت فورج
+        try:
+            merger = Merger()
+            merged = merger.merge(paths)
+            merged.save(out)
+            write_log_line(f"fontTools.merge: Merged fonts (fallback)")
+            return out
+        except Exception as ex2:
+            write_log_line(f"[ERROR] fontTools.merge also failed: {ex2}")
+            raise RuntimeError(f"All merge methods failed: {ex}, {ex2}")
+
+# ---------- Text shaping with Harfbuzz ----------
+def shape_text_harfbuzz(text, font_path, font_size, direction='ltr'):
+    if hb is None:
+        return None
+
+    try:
+        # Load font file
+        with open(font_path, 'rb') as font_file:
+            font_data = font_file.read()
+
+        # Create face and font
+        face = hb.Face(font_data)
+        font = hb.Font(face)
+        font.scale = (font_size, font_size)
+        hb.ot_font_set_funcs(font)
+
+        # Create buffer
+        buf = hb.Buffer()
+        buf.add_str(text)
+        buf.guess_segment_properties()
+
+        # Set direction
+        if direction == 'rtl':
+            buf.direction = 'rtl'
+            buf.script = 'arab'
+            buf.language = 'ar'
+
+        # Shape text
+        hb.shape(font, buf)
+
+        # Get glyph information
+        infos = buf.glyph_infos
+        positions = buf.glyph_positions
+
+        # Calculate text width and height
+        width = sum(pos.x_advance for pos in positions) / 64
+        height = font_size
+
+        return width, height, infos, positions, font
+
+    except Exception as e:
+        write_log_line(f"[WARN] HarfBuzz shaping failed: {e}")
+        return None
+
+# ---------- Text wrapping helper ----------
 def wrap_text_to_lines(text, font, max_width, is_ar=False, draw=None):
-    """تقسيم النص إلى أسطر لتناسب عرض معين."""
+    """
+    Wrap text into lines that fit max_width.
+    For Arabic, use original text and measure with direction='rtl'.
+    """
     if draw is None:
-        # إنشاء كائن رسم مؤقت إذا لم يتم توفيره
-        draw = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-        
+        draw = ImageDraw.Draw(Image.new("RGB", (10,10)))
+    words = text.split(" ")
     lines = []
-    # التعامل مع النص العربي ككتلة واحدة في كل سطر
-    if is_ar:
-        words = text.split(' ')
-        current_line = ""
-        for word in words:
-            # إضافة الكلمة التالية وتجربة قياسها
-            test_line = (current_line + ' ' + word).strip()
-            bbox = draw.textbbox((0, 0), test_line, font=font, direction="rtl", language="ar")
-            if bbox[2] - bbox[0] <= max_width:
-                current_line = test_line
+    cur = ""
+    for w in words:
+        trial = (cur + " " + w).strip() if cur else w
+        if is_ar:
+            bbox = draw.textbbox((0,0), trial, font=font, direction="rtl", language="ar")
+        else:
+            bbox = draw.textbbox((0,0), trial, font=font)
+        w_px = bbox[2] - bbox[0]
+        if w_px <= max_width:
+            cur = trial
+        else:
+            if cur:
+                lines.append(cur)
+            # if single word too long, break by characters
+            if is_ar:
+                single_bbox = draw.textbbox((0,0), w, font=font, direction="rtl", language="ar")
             else:
-                lines.append(current_line)
-                current_line = word
-        lines.append(current_line) # إضافة السطر الأخير
-        return lines
+                single_bbox = draw.textbbox((0,0), w, font=font)
+            if single_bbox[2] - single_bbox[0] > max_width:
+                # break into characters
+                part = ""
+                for ch in w:
+                    trial2 = part + ch
+                    if is_ar:
+                        bbox2 = draw.textbbox((0,0), trial2, font=font, direction="rtl", language="ar")
+                    else:
+                        bbox2 = draw.textbbox((0,0), trial2, font=font)
+                    if bbox2[2] - bbox2[0] <= max_width:
+                        part = trial2
+                    else:
+                        if part:
+                            lines.append(part)
+                        part = ch
+                if part:
+                    cur = part
+                else:
+                    cur = ""
+            else:
+                cur = w
+    if cur:
+        lines.append(cur)
+    return lines
 
-    # التعامل مع النص الإنجليزي كلمة بكلمة
-    return [line.strip() for line in text.splitlines() for wrapped_line in [line] for word_list in [wrapped_line.split(' ')] for line in [word_list.pop(0)] if word_list for line in (lambda l, w: [l] + w if draw.textlength(l, font=font) <= max_width else l.split())(line, []) for word in word_list if (lambda l, w: l if draw.textlength(l + ' ' + w, font=font) <= max_width else (lines.append(l), w))(line, word)]
-
-def create_preview(merged_ttf, out_jpg, bg_color, text_color):
-    """إنشاء صورة معاينة عالية الجودة للخط المدمج."""
-    W, H = 3200, 1440  # دقة عالية مناسبة
+# ---------- Preview creation (high resolution) ----------
+def create_preview(merged_ttf, out_jpg, bg_color="white", text_color="black"):
+    W, H = 6400, 2880  # دقة عالية
     img = Image.new("RGB", (W, H), bg_color)
     draw = ImageDraw.Draw(img)
 
     try:
-        font_size = 150 # حجم خط ابتدائي
-        
-        # محاولة تحميل الخط
-        try:
-            font = ImageFont.truetype(merged_ttf, font_size)
-        except Exception as e:
-            write_log_line(f"WARN: Could not load merged font for preview: {e}. Using default.")
-            font = ImageFont.load_default()
+        has_raqm = features.check_feature("raqm")
+        write_log_line(f"Pillow has Raqm support: {has_raqm}")
 
-        # حساب منطقة النص (90% من عرض الصورة)
+        # حجم الخط الأساسي (تم تكبيره بنسبة 10%)
+        base_size = 330
+
+        # محاولة تحميل الخط المدمج
+        try:
+            font_en = ImageFont.truetype(merged_ttf, base_size)
+            font_ar = ImageFont.truetype(merged_ttf, base_size)
+        except Exception:
+            # استخدام الخط الافتراضي إذا فشل التحميل
+            font_en = ImageFont.load_default()
+            font_ar = ImageFont.load_default()
+
+        # حساب عرض منطقة الالتفاف (~90% من العرض لملء الصورة)
         max_w = int(W * 0.9)
-        padding_y = int(H * 0.1)
-        
-        # --- النص الإنجليزي (الجزء العلوي) ---
-        # استخدام التفاف بسيط للنص الإنجليزي
-        en_lines = [
-            "The quick brown fox jumps",
-            "over the lazy dog.",
-            "1234567890"
-        ]
-        
-        y = padding_y
-        for line in en_lines:
-            bbox = draw.textbbox((0, 0), line, font=font)
-            line_width = bbox[2] - bbox[0]
-            line_height = bbox[3] - bbox[1]
-            x = (W - line_width) / 2
-            draw.text((x, y), line, font=font, fill=text_color)
-            y += line_height + int(font_size * 0.2) # تباعد بين الأسطر
 
-        # --- النص العربي (الجزء السفلي) ---
-        reshaped_ar = arabic_reshaper.reshape(AR_PREVIEW)
-        bidi_ar = get_display(reshaped_ar)
-        
-        # التفاف النص العربي
-        ar_lines = wrap_text_to_lines(bidi_ar, font, max_w, is_ar=True, draw=draw)
-        
-        # حساب الارتفاع الكلي للنص العربي للتموضع
-        total_ar_height = sum(draw.textbbox((0, 0), line, font=font)[3] - draw.textbbox((0, 0), line, font=font)[1] for line in ar_lines)
-        total_ar_height += (len(ar_lines) - 1) * int(font_size * 0.2)
-        
-        # البدء من منتصف النصف السفلي من الصورة
-        y = (H / 2) + ((H / 2) - total_ar_height) / 2
+        # تكبير الخط حتى يصل إلى 85% من العرض
+        size = base_size
+        while True:
+            try:
+                font_en = ImageFont.truetype(merged_ttf, size)
+            except Exception:
+                font_en = ImageFont.load_default()
+            bbox = draw.textbbox((0,0), EN_PREVIEW, font=font_en)
+            w = bbox[2] - bbox[0]
+            if w >= W * 0.85 or size >= 1500:  # حد أقصى للحجم
+                break
+            size += 75  # زيادة أكبر للحصول على حجم أكبر
 
-        for line in ar_lines:
-            bbox = draw.textbbox((0, 0), line, font=font, direction="rtl", language="ar")
-            line_width = bbox[2] - bbox[0]
-            line_height = bbox[3] - bbox[1]
-            x = (W - line_width) / 2
-            draw.text((x, y), line, font=font, fill=text_color, direction="rtl", language="ar")
-            y += line_height + int(font_size * 0.2)
-            
-        img.save(out_jpg, "JPEG", quality=95, dpi=(300, 300))
-        write_log_line(f"Pillow: Created preview image at {os.path.basename(out_jpg)}.")
-        return True
+        # صغر الحجم النهائي بنسبة 10%
+        size = int(size * 0.9)
 
-    except Exception as ex:
-        write_log_line(f"ERROR: Preview creation failed: {ex}\n{traceback.format_exc()}")
-        return False
-
-# ---------- Main Execution ----------
-def main(args):
-    # إعداد المجلدات وملف السجل
-    base_dir = args.output_dir
-    os.makedirs(os.path.join(base_dir, "previews"), exist_ok=True)
-    os.makedirs(os.path.join(base_dir, "merged"), exist_ok=True)
-    setup_logging(base_dir)
-    
-    # استخدام مجلد مؤقت آمن
-    temp_dir = tempfile.mkdtemp(prefix="font_merge_", dir=os.path.join(base_dir, "temp_processing"))
-    
-    try:
-        print("Starting font merge process...")
-        write_log_line("=== Font Merge Process Started ===")
-
-        ar_path = args.arabic_font
-        en_path = args.english_font
-
-        if not os.path.exists(ar_path):
-            raise FileNotFoundError(f"Arabic font not found: {ar_path}")
-        if not os.path.exists(en_path):
-            raise FileNotFoundError(f"English font not found: {en_path}")
-            
-        # نسخ الخطوط إلى المجلد المؤقت للعمل عليها
-        ar_temp = shutil.copy(ar_path, temp_dir)
-        en_temp = shutil.copy(en_path, temp_dir)
-
-        # 1. تحويل الخطوط إلى TTF إذا لزم الأمر
-        print("Step 1/6: Converting fonts to TTF (if needed)...")
-        ar_ttf = convert_otf_to_ttf(ar_temp, temp_dir)
-        en_ttf = convert_otf_to_ttf(en_temp, temp_dir)
-
-        # 2. توحيد unitsPerEm
-        print("Step 2/6: Unifying font metrics (unitsPerEm)...")
+        # تحميل الخط بالحجم النهائي
         try:
-            ar_unified, en_unified = try_unify_units([ar_ttf, en_ttf])
-        except Exception as e:
-            write_log_line(f"WARN: Failed to unify unitsPerEm, proceeding anyway. Error: {e}")
-            ar_unified, en_unified = ar_ttf, en_ttf
+            font_en = ImageFont.truetype(merged_ttf, size)
+            font_ar = ImageFont.truetype(merged_ttf, size)
+        except Exception:
+            font_en = ImageFont.load_default()
+            font_ar = ImageFont.load_default()
 
-        # 3. تنقية اللغات (اختياري لكن موصى به)
-        print("Step 3/6: Subsetting fonts to keep relevant glyphs...")
-        ar_clean, en_clean = clean_up_languages(ar_unified, en_unified, temp_dir)
+        # تفصيل النص الإنجليزي إلى أسطر
+        en_lines = wrap_text_to_lines(EN_PREVIEW, font_en, max_w, is_ar=False, draw=draw)
 
-        # 4. دمج الخطوط باستخدام fontTools
-        print("Step 4/6: Merging Arabic and English fonts...")
-        out_name = f"{os.path.splitext(os.path.basename(ar_path))[0]}_{os.path.splitext(os.path.basename(en_path))[0]}.ttf"
-        merged_path_temp = os.path.join(temp_dir, out_name)
-        
-        merger = Merger()
-        merged_font = merger.merge([ar_clean, en_clean])
-        merged_font.save(merged_path_temp)
-        write_log_line("FontTools: Fonts merged successfully.")
+        # تحضير النص العربي بناءً على دعم Raqm
+        if has_raqm:
+            ar_text = AR_PREVIEW
+            use_rtl = True
+        else:
+            reshaped_ar = arabic_reshaper.reshape(AR_PREVIEW)
+            ar_text = get_display(reshaped_ar)
+            use_rtl = False
 
-        # نقل الخط المدمج إلى المجلد النهائي
-        final_font_path = get_unique_path(os.path.join(base_dir, "merged", os.path.basename(merged_path_temp)))
-        shutil.move(merged_path_temp, final_font_path)
+        # تفصيل النص العربي إلى أسطر
+        ar_lines = wrap_text_to_lines(ar_text, font_ar, max_w, is_ar=use_rtl, draw=draw)
 
-        # 5. إنشاء صور المعاينة
-        print("Step 5/6: Creating preview images...")
-        preview_name = os.path.splitext(os.path.basename(final_font_path))[0]
-        
-        # Preview 1 (White background)
-        preview_path_white = get_unique_path(os.path.join(base_dir, "previews", f"{preview_name}_white.jpg"))
-        create_preview(final_font_path, preview_path_white, bg_color="white", text_color="black")
-        
-        # Preview 2 (Dark background)
-        preview_path_dark = get_unique_path(os.path.join(base_dir, "previews", f"{preview_name}_dark.jpg"))
-        create_preview(final_font_path, preview_path_dark, bg_color="#121212", text_color="white")
-        
-        print("Step 6/6: Process finished successfully.")
-        write_log_line("=== Process Finished Successfully ===")
-        print("\n--- Outputs ---")
-        print(f"Merged Font: {final_font_path}")
-        print(f"White Preview: {preview_path_white}")
-        print(f"Dark Preview: {preview_path_dark}")
-        
-    except Exception as e:
-        error_msg = f"FATAL ERROR: {e}"
-        print(error_msg)
-        write_log_line(error_msg)
+        # حساب ارتفاع النص العربي
+        spacing = int(size * 0.2)
+        ar_total_h = 0
+        for ln in ar_lines:
+            if use_rtl:
+                bbox = draw.textbbox((0,0), ln, font=font_ar, direction="rtl", language="ar")
+            else:
+                bbox = draw.textbbox((0,0), ln, font=font_ar)
+            ar_total_h += (bbox[3] - bbox[1]) + spacing
+        ar_total_h -= spacing  # إزالة التباعد الأخير
+
+        # حساب ارتفاع النص الإنجليزي
+        en_total_h = 0
+        for ln in en_lines:
+            bbox = draw.textbbox((0,0), ln, font=font_en)
+            en_total_h += (bbox[3] - bbox[1]) + spacing
+        en_total_h -= spacing  # إزالة التباعد الأخير
+
+        # رسم النص الإنجليزي في الربع العلوي
+        start_en_y = max(20, (H//2 - en_total_h) // 2)
+        y = start_en_y
+        for ln in en_lines:
+            bbox = draw.textbbox((0,0), ln, font=font_en)
+            w = bbox[2] - bbox[0]
+            x = (W - w) / 2
+            draw.text((x, y), ln, font=font_en, fill=text_color)
+            y += (bbox[3] - bbox[1]) + spacing
+
+        # رسم النص العربي في الربع السفلي
+        start_ar_y = H//2 + max(20, (H//2 - ar_total_h) // 2)
+        start_ar_y -= 100  # رفع النص العربي إلى الأعلى قليلاً (تقليل y بـ 100 بكسل)
+        y = start_ar_y
+        for ln in ar_lines:
+            if use_rtl:
+                bbox = draw.textbbox((0,0), ln, font=font_ar, direction="rtl", language="ar")
+                w = bbox[2] - bbox[0]
+                x = (W - w) / 2
+                draw.text((x, y), ln, font=font_ar, fill=text_color, direction="rtl", language="ar")
+            else:
+                bbox = draw.textbbox((0,0), ln, font=font_ar)
+                w = bbox[2] - bbox[0]
+                x = (W - w) / 2
+                draw.text((x, y), ln, font=font_ar, fill=text_color)
+            y += (bbox[3] - bbox[1]) + spacing
+
+        # حفظ الصورة بدقة عالية بصيغة JPEG
+        img.save(out_jpg, "JPEG", quality=95, dpi=(600, 600))
+        write_log_line(f"Pillow: Created high-quality preview")
+        return True
+    except Exception as ex:
+        write_log_line(f"[WARN] Preview creation failed: {ex}")
+        try:
+            # النسخة الاحتياطية في حالة الفشل
+            f_default = ImageFont.load_default()
+            draw.text((100, 500), EN_PREVIEW, font=f_default, fill=text_color)
+
+            # Fallback للنص العربي
+            try:
+                draw.text((100, H//2 + 500), AR_PREVIEW, font=f_default, fill=text_color, direction="rtl", language="ar")
+            except:
+                reshaped_ar = arabic_reshaper.reshape(AR_PREVIEW)
+                bidi_ar = get_display(reshaped_ar)
+                draw.text((100, H//2 + 500), bidi_ar, font=f_default, fill=text_color)
+
+            img.save(out_jpg, "JPEG", quality=95)
+            write_log_line(f"Pillow: Created fallback preview")
+            return False
+        except Exception as ex2:
+            write_log_line(f"[WARN] Fallback preview creation failed: {ex2}")
+            return False
+
+# ---------- Main Merge Function ----------
+def main_merge(a_name, e_name):
+    console = Console()
+
+    # كتابة رأس السجل
+    write_log_header()
+
+    # إنشاء مجلد المعالجة المؤقتة
+    processing_dir = tempfile.mkdtemp(dir=TEMP_DIR)
+
+    try:
+        write_log_line("=== بدء دمج الخطوط ===")
+
+        if not os.path.isdir(FONT_DIR):
+            print(f"[ERROR] Fonts folder not found: {FONT_DIR}")
+            write_log_line(f"[ERROR] مجلد الخطوط غير موجود: {FONT_DIR}")
+            return "Failed: Fonts folder not found"
+
+        a_path = os.path.join(FONT_DIR, a_name)
+        e_path = os.path.join(FONT_DIR, e_name)
+
+        if not os.path.exists(a_path):
+            print(f"[ERROR] Arabic font not found: {a_path}")
+            write_log_line(f"[ERROR] الخط العربي غير موجود: {a_path}")
+            return "Failed: Arabic font not found"
+        if not os.path.exists(e_path):
+            print(f"[ERROR] English font not found: {e_path}")
+            write_log_line(f"[ERROR] الخط الإنجليزي غير موجود: {e_path}")
+            return "Failed: English font not found"
+
+        # نسخ الملفات إلى المجلد المؤقت
+        a_temp = copy_to_temp(a_path, processing_dir)
+        e_temp = copy_to_temp(e_path, processing_dir)
+
+        temp_files = []
+        steps = 8  # تم تقليل الخطوات بعد إزالة تحويل المتغير إلى ثابت
+        merged_path = None
+        preview_path = None
+
+        with Progress(
+            TextColumn(" "),
+            BarColumn(complete_style="white", finished_style="white", pulse_style="light_gray"),
+            TextColumn("[white]{task.percentage:>3.0f}%[/white]"),
+            TextColumn("({task.completed}/{task.total})"),
+            TimeRemainingColumn(),
+            console=console
+        ) as progress:
+            task = progress.add_task("", total=steps)
+
+            # 1 convert Arabic OTF/CFF->TTF
+            try:
+                a_ttf = convert_otf_to_ttf(a_temp, temp_files)
+            except Exception as ex:
+                write_log_line(f"خطأ أثناء تحويل عربي: {ex}")
+                a_ttf = a_temp
+            progress.update(task, advance=1)
+
+            # 2 convert English OTF/CFF->TTF
+            try:
+                e_ttf = convert_otf_to_ttf(e_temp, temp_files)
+            except Exception as ex:
+                write_log_line(f"خطأ أثناء تحويل إنجليزي: {ex}")
+                e_ttf = e_temp
+            progress.update(task, advance=1)
+
+            # 3 unify unitsPerEm
+            try:
+                a_ttf, e_ttf = try_unify_units([a_ttf, e_ttf])
+            except Exception as ex:
+                write_log_line(f"Unify units error: {ex}")
+            progress.update(task, advance=1)
+
+            # 4 subset to remove unwanted glyphs
+            try:
+                a_clean, e_clean = clean_languages(a_ttf, e_ttf, temp_files)
+            except Exception as ex:
+                write_log_line(f"Subsetting error: {ex}")
+                a_clean, e_clean = a_ttf, e_ttf
+            progress.update(task, advance=1)
+
+            # 5 merge with FontForge
+            outname = os.path.splitext(os.path.basename(a_name))[0] + "_" + os.path.splitext(os.path.basename(e_name))[0] + ".ttf"
+            outpath = unique_name(os.path.join(processing_dir, outname))
+            try:
+                merged_path = merge_fonts_with_fontforge([a_clean, e_clean], outpath)
+            except Exception as ex:
+                write_log_line(f"[ERROR] Merge failed: {ex}")
+                write_log_line(traceback.format_exc())
+                raise
+            progress.update(task, advance=1)
+
+            # 6 create preview JPG
+            preview_name = os.path.splitext(os.path.basename(merged_path))[0] + ".jpg"
+            preview_path = unique_name(os.path.join(processing_dir, preview_name))
+            create_preview(merged_path, preview_path)
+            progress.update(task, advance=1)
+
+            # 7 create 121212 preview JPG
+            preview_121212_name = os.path.splitext(os.path.basename(merged_path))[0] + "_121212.jpg"
+            preview_121212_path = unique_name(os.path.join(processing_dir, preview_121212_name))
+            create_preview(merged_path, preview_121212_path, bg_color=(18,18,18), text_color="white")
+            progress.update(task, advance=1)
+
+            # 8 finish
+            progress.update(task, completed=steps)
+
+        # نقل الملفات النهائية إلى المجلد الرئيسي
+        final_font_path = None
+        final_preview_path = None
+        final_preview_121212_path = None
+
+        if merged_path and os.path.exists(merged_path):
+            final_font_path = unique_name(os.path.join(FONT_DIR, "merged", os.path.basename(merged_path)))
+            shutil.move(merged_path, final_font_path)
+
+        if preview_path and os.path.exists(preview_path):
+            final_preview_path = unique_name(os.path.join(FONT_DIR, "previews", os.path.basename(preview_path)))
+            shutil.move(preview_path, final_preview_path)
+
+        if preview_121212_path and os.path.exists(preview_121212_path):
+            final_preview_121212_path = unique_name(os.path.join(FONT_DIR, "previews", os.path.basename(preview_121212_path)))
+            shutil.move(preview_121212_path, final_preview_121212_path)
+
+        # عرض النتائج النهائية
+        if final_font_path and os.path.exists(final_font_path):
+            print(f"{Fore.GREEN}✓ Successful")
+            print(f"{Fore.BLUE}{final_font_path}")
+            if final_preview_path and os.path.exists(final_preview_path):
+                print(f"{Fore.BLUE}{final_preview_path}")
+            if final_preview_121212_path and os.path.exists(final_preview_121212_path):
+                print(f"{Fore.BLUE}{final_preview_121212_path}")
+            return "Success: Merge completed"
+        else:
+            print(f"{Fore.RED}✗ Failed")
+            print(f"{Fore.RED}Merge operation failed")
+            return "Failed: Merge operation failed"
+
+    except Exception as main_ex:
+        print(f"{Fore.RED}✗ Failed")
+        print(f"{Fore.RED}{str(main_ex)}")
+        write_log_line(f"[FATAL] استثناء أثناء العملية: {main_ex}")
         write_log_line(traceback.format_exc())
-        sys.exit(1) # الخروج برمز خطأ
-        
+        return f"Failed: {str(main_ex)}"
     finally:
-        # تنظيف المجلد المؤقت دائماً
-        shutil.rmtree(temp_dir, ignore_errors=True)
-        print("Temporary files cleaned up.")
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Merge Arabic and English fonts and create high-quality previews.")
-    parser.add_argument("arabic_font", help="Path to the Arabic font file.")
-    parser.add_argument("english_font", help="Path to the English font file.")
-    parser.add_argument("output_dir", help="The base directory for all outputs (merged, previews, logs).")
-    
-    # إنشاء مجلد مؤقت للمعالجة داخل مجلد الإخراج
-    # هذا يضمن أن تكون الملفات المؤقتة في مكان معروف
-    args = parser.parse_args()
-    temp_processing_dir = os.path.join(args.output_dir, "temp_processing")
-    os.makedirs(temp_processing_dir, exist_ok=True)
-    
-    main(args)
+        # تنظيف المجلد المؤقت
+        try:
+            shutil.rmtree(processing_dir, ignore_errors=True)
+        except:
+            pass
